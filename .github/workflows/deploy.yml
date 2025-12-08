@@ -1,0 +1,95 @@
+name: Deploy Hybrid PII Service
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: pii-system/pii-api
+  ECS_CLUSTER: staging-pii-cluster
+  CONTAINER_NAME: pii-api
+
+  # 배포 환경에 따라 변경필요
+  ECS_SERVICE_CLOUD: staging-cloud-service
+  ECS_SERVICE_ONPREM: staging-onprem-service
+  ECS_TASK_DEFINITION_CLOUD: staging-cloud-task
+  ECS_TASK_DEFINITION_ONPREM: staging-onprem-task
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # Cloud Task Definition 업데이트
+      - name: Download Cloud Task Definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_CLOUD }} \
+            --query taskDefinition > cloud-task-definition.json
+
+      - name: Update Cloud Task Definition with new image
+        id: cloud-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: cloud-task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to ECS (Public Cloud)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.cloud-task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_CLOUD }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      # On-Premise Task Definition 업데이트
+      - name: Download On-Premise Task Definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_ONPREM }} \
+            --query taskDefinition > onprem-task-definition.json
+
+      - name: Update On-Premise Task Definition with new image
+        id: onprem-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: onprem-task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to ECS (On-Premise)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.onprem-task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_ONPREM }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
