@@ -1,7 +1,11 @@
 import logging
 from fastapi import FastAPI
 from app.core.config import settings
-from app.routers import health
+from app.routers import health, pii, bookings
+from app.models import pii as pii_models, booking as booking_models
+from app.core.database import Base, engine
+
+logger = logging.getLogger("uvicorn")
 
 
 # 로그 필터링
@@ -28,24 +32,19 @@ for logger_name in ["uvicorn.access", "uvicorn"]:
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
+# 데이터베이스 테이블 자동 생성 (앱 시작 시)
+Base.metadata.create_all(bind=engine)
+
 # 1. 공통 라우터 (Health Check) - 어디서든 동작
 app.include_router(health.router)
 
 # 2. 환경별 라우터 분기 (핵심 로직)
 if settings.IS_ONPREM:
-    print(f"🚀 [Startup] ON-PREMISE Mode Detected. Enabling PII Routers...")
-    from app.routers import pii
-
+    logger.info("🏢 [Startup] ON-PREMISE Mode: PII Router Activated.")
     app.include_router(pii.router)
 else:
-    print(f"☁️ [Startup] CLOUD Mode Detected. PII Routers are DISABLED.")
-
-    # 클라우드용 더미 라우터 (보안 강화: PII 경로 요청 시 명확한 거절 메시지)
-    @app.api_route("/pii/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-    def block_pii_requests(path: str):
-        return {
-            "error": "Access Denied: PII operations are not allowed in Cloud environment."
-        }
+    logger.info("☁️ [Startup] CLOUD Mode: Booking Router Activated.")
+    app.include_router(bookings.router)
 
 
 if __name__ == "__main__":

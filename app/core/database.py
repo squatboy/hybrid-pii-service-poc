@@ -1,12 +1,15 @@
 import logging
 import threading
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import OperationalError
 from app.core.security import get_db_credentials
 from app.core.config import settings
 
 logger = logging.getLogger("uvicorn")
+
+# SQLAlchemy ORM 기본 클래스
+Base = declarative_base()
 
 # 전역 변수
 _engine = None
@@ -103,3 +106,26 @@ def get_db_session():
     finally:
         if db is not None:
             db.close()  # Pool에 연결 반환
+
+
+# 호환성: get_db는 get_db_session의 별칭
+def get_db():
+    """
+    get_db_session의 별칭. FastAPI 라우터에서 Depends(get_db) 형태로 사용 가능.
+    """
+    yield from get_db_session()
+
+
+# 초기화: engine 전역 변수 설정 (테이블 생성용)
+def get_engine():
+    """
+    현재 엔진을 반환합니다. 없으면 초기화합니다.
+    """
+    global _engine
+    if _engine is None:
+        _init_db_pool()
+    return _engine
+
+
+# 모듈 임포트 시 engine 초기화
+engine = get_engine()

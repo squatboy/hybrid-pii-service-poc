@@ -1,44 +1,59 @@
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from app.core.database import get_db_session
-from app.models.pii import UserPII
+from app.core.database import get_db
+from app.models import pii as models
+from app.schemas import pii as schemas
+from app.core.config import settings
 
-# 온프레미스에서만 로딩될 라우터
-router = APIRouter(prefix="/pii", tags=["PII"])
+logger = logging.getLogger("uvicorn")
 
-
-# 요청 스키마
-class TokenizeRequest(BaseModel):
-    name: str
-    passport_no: str
+router = APIRouter(prefix="/pii", tags=["PII (On-Premise)"])
 
 
-# 1. 토큰화 (PII 저장)
-@router.post("/tokenize")
-def tokenize(req: TokenizeRequest, db: Session = Depends(get_db_session)):
-    try:
-        new_user = UserPII(name=req.name, passport_no=req.passport_no)
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
+# -----------------------------------------------------------------------------
+# [Public] PII 생성
+# -----------------------------------------------------------------------------
+@router.post("/", response_model=schemas.PIIResponse)
+def create_pii(pii_in: schemas.PIICreate, db: Session = Depends(get_db)):
+    # 암호화 없이 바로 저장
+    db_pii = models.UserPII(
+        name=pii_in.name,
+        email=pii_in.email,
+        phone=pii_in.phone,
+        passport_no=pii_in.passport_no,
+    )
+    db.add(db_pii)
+    db.commit()
+    db.refresh(db_pii)
 
-        # ID(토큰)만 반환
-        return {"status": "success", "pii_id": new_user.id}
-    except Exception as e:
-        print(f"❌ [DB Error] {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to store PII: {str(e)}")
+    return db_pii
 
 
-# 2. 역토큰화 (PII 조회)
-@router.get("/detokenize/{pii_id}")
-def detokenize(pii_id: int, db: Session = Depends(get_db_session)):
-    try:
-        user = db.query(UserPII).filter(UserPII.id == pii_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="PII not found")
+# -----------------------------------------------------------------------------
+# [Internal] PII 조회
+# -----------------------------------------------------------------------------
+@router.get("/internal/{user_id}", response_model=schemas.PIIResponse)
+def get_internal_pii(
+    user_id: str, db: Session = Depends(get_db), x_internal_token: str = Header(None)
+):
+    """
+    [Internal Only] VPN을 통해 접근하는 퍼블릭 클라우드 서비스에 PII 제공
+    """
+    # 1. 보안 헤더 체크
+    expected_token = getattr(settings, "INTERNAL_API_TOKEN", "my-secret-token")
 
-        return {"pii_id": user.id, "name": user.name, "passport_no": user.passport_no}
-    except Exception as e:
-        print(f"❌ [DB Error] {str(e)}")
-        raise HTTPException(status_code=500, detail="Database connection error")
+    if x_internal_token != expected_token:
+        logger.warning(f"⛔ [Access Denied] Invalid Token request for {user_id}")
+        raise HTTPException(status_code=403, detail="Unauthorized access")
+
+    # 2. DB 조회
+    user_pii = (
+        db.query(models.UserPII).filter(models.UserPII.user_id == user_id).first()
+    )
+
+    if not user_pii:
+        raise HTTPException(status_code=404, detail="User PII not found")
+
+    logger.info(f"🔓 [Internal API] PII provided for user {user_id} via VPN")
+    return user_pii
