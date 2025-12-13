@@ -1,9 +1,12 @@
+import logging
 import threading
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from app.core.security import get_db_credentials
 from app.core.config import settings
+
+logger = logging.getLogger("uvicorn")
 
 # 전역 변수
 _engine = None
@@ -13,7 +16,9 @@ _pool_lock = threading.Lock()  # 스레드 경합 방지용 락
 
 def _init_db_pool():
     """
-    Vault에서 Credential을 조회하고 Connection Pool 생성.
+    DB 접속 정보를 가져오고 Connection Pool 생성.
+    - Cloud 환경: settings.DATABASE_URL이 이미 설정됨 (config.py에서 AWS Secrets Manager에서 로드)
+    - On-Prem 환경: Vault에서 Credential을 조회하여 CONNECTION_STRING 생성
     기존 Pool이 있으면 정리 후 새로 생성 (비밀번호 Rotation 대응).
     """
     global _engine, _SessionLocal
@@ -22,21 +27,26 @@ def _init_db_pool():
     with _pool_lock:
         # 기존 엔진이 있다면 연결 종료 (리소스 정리)
         if _engine is not None:
-            print("🔄 [Database] Disposing old connection pool...")
+            logger.info("🔄 [Database] Disposing old connection pool...")
             _engine.dispose()
 
         try:
-            # Vault에서 비밀번호 가져옴
-            creds = get_db_credentials()
-
-            # Connection String 생성
-            DATABASE_URL = f"mysql+pymysql://{creds['user']}:{creds['password']}@{creds['host']}:{creds['port']}/{creds['db']}"
+            # DATABASE_URL 결정
+            if settings.DATABASE_URL:
+                # Cloud 모드: 이미 config.py에서 로드됨
+                DATABASE_URL = settings.DATABASE_URL
+                logger.info("☁️ [Database] Using Cloud Mode (AWS Secrets Manager)")
+            else:
+                # On-Prem 모드: Vault에서 조회
+                creds = get_db_credentials()
+                DATABASE_URL = f"mysql+pymysql://{creds['user']}:{creds['password']}@{creds['host']}:{creds['port']}/{creds['db']}"
+                logger.info("🏢 [Database] Using On-Premise Mode (Vault)")
 
             # Connection Pool이 포함된 엔진 생성
             _engine = create_engine(
                 DATABASE_URL,
-                pool_size=5,  # 기본 연결 수
-                max_overflow=10,  # 추가 허용 연결 수
+                pool_size=settings.DB_POOL_SIZE,
+                max_overflow=settings.DB_MAX_OVERFLOW,
                 pool_timeout=30,  # 연결 대기 타임아웃 (초)
                 pool_recycle=1800,  # 연결 재활용 주기 (30분, MySQL wait_timeout 대응)
                 pool_pre_ping=True,  # 연결 전 Ping 테스트 (Stale Connection 방지)
@@ -44,10 +54,10 @@ def _init_db_pool():
             _SessionLocal = sessionmaker(
                 autocommit=False, autoflush=False, bind=_engine
             )
-            print("✅ [Database] Connection Pool initialized successfully.")
+            logger.info("✅ [Database] Connection Pool initialized successfully.")
 
         except Exception as e:
-            print(f"❌ [Database] Failed to initialize pool: {str(e)}")
+            logger.error(f"❌ [Database] Failed to initialize pool: {str(e)}")
             raise e
 
 
@@ -73,7 +83,7 @@ def get_db_session():
         error_code = e.orig.args[0] if e.orig and e.orig.args else 0
 
         if error_code in [1045, 1044]:
-            print(
+            logger.warning(
                 f"⚠️ [Database] Authentication failed (error: {error_code}). Refreshing credentials..."
             )
 
