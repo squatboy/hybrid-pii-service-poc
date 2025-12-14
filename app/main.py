@@ -2,8 +2,13 @@ import logging
 from fastapi import FastAPI
 from app.core.config import settings
 from app.routers import health, pii, bookings
-from app.models import pii as pii_models, booking as booking_models
 from app.core.database import Base, engine
+
+# 환경에 따라 필요한 모델만 로드
+if settings.IS_ONPREM:
+    from app.models import pii as pii_models
+else:
+    from app.models import booking as booking_models
 
 logger = logging.getLogger("uvicorn")
 
