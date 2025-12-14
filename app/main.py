@@ -1,14 +1,8 @@
 import logging
 from fastapi import FastAPI
 from app.core.config import settings
-from app.routers import health, pii, bookings
 from app.core.database import Base, engine
-
-# 환경에 따라 필요한 모델만 로드
-if settings.IS_ONPREM:
-    from app.models import pii as pii_models
-else:
-    from app.models import booking as booking_models
+from app.routers import health
 
 logger = logging.getLogger("uvicorn")
 
@@ -37,19 +31,23 @@ for logger_name in ["uvicorn.access", "uvicorn"]:
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
-# 데이터베이스 테이블 자동 생성 (앱 시작 시)
-Base.metadata.create_all(bind=engine)
-
 # 1. 공통 라우터 (Health Check) - 어디서든 동작
 app.include_router(health.router)
 
-# 2. 환경별 라우터 분기 (핵심 로직)
+# 2. 환경별 라우터 분기 (조건부 import로 모델 로딩 제어)
 if settings.IS_ONPREM:
-    logger.info("🏢 [Startup] ON-PREMISE Mode: PII Router Activated.")
-    app.include_router(pii.router)
+    logger.info("🏢 [Startup] ON-PREMISE Mode Detected.")
+    from app.routers import pii as pii_router
+    from app.models import pii as pii_models
+    app.include_router(pii_router.router)
 else:
-    logger.info("☁️ [Startup] CLOUD Mode: Booking Router Activated.")
-    app.include_router(bookings.router)
+    logger.info("☁️ [Startup] CLOUD Mode Detected.")
+    from app.routers import bookings as bookings_router
+    from app.models import booking as booking_models
+    app.include_router(bookings_router.router)
+
+# 데이터베이스 테이블 자동 생성 (환경별 모델 로드 후 실행)
+Base.metadata.create_all(bind=engine)
 
 
 if __name__ == "__main__":

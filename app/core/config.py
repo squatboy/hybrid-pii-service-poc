@@ -32,10 +32,10 @@ class Settings(BaseSettings):
     # 웹 서버 설정
     PORT: int = 8000
 
-    # [신규 추가] 온프레미스 서비스 주소 (VPN 내부 IP)
+    # 온프레미스 서비스 주소 (VPN 내부 IP)
     ONPREM_SERVICE_URL: str = os.getenv("ONPREM_SERVICE_URL", "http://10.10.10.20:8000")
 
-    # [신규 추가] 내부 통신용 보안 토큰
+    # 내부 통신용 보안 토큰
     INTERNAL_API_TOKEN: str = os.getenv("INTERNAL_API_TOKEN", "my-secret-token")
 
     def __init__(self, **values):
