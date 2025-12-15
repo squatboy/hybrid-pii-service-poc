@@ -117,7 +117,7 @@ def calculate_quote(booking_in: schemas.BookingCreate):
         f"💰 [Quote] Calculating complex pricing for {booking_in.destination}..."
     )
 
-    for i in range(500000):
+    for i in range(50000):
         discount_factor += math.sqrt(i) * random.random()
         base_price = base_price + (math.sin(i) * 0.01)
 
