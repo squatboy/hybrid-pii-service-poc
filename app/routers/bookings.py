@@ -1,5 +1,8 @@
 import logging
 import httpx
+import hashlib
+import random
+import math
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -99,3 +102,40 @@ async def confirm_booking(booking_id: int, db: Session = Depends(get_db)):
 
     logger.info(f"✅ [Booking] Confirmed booking #{booking_id}")
     return booking
+
+
+# -----------------------------------------------------------------------------
+# 3. 실시간 견적 산출 (CPU Intensive) - 오토스케일링 테스트용
+# -----------------------------------------------------------------------------
+@router.post("/quote", response_model=schemas.QuoteResponse)
+def calculate_quote(booking_in: schemas.BookingCreate):
+
+    base_price = 1000.0
+    discount_factor = 0.0
+
+    logger.info(
+        f"💰 [Quote] Calculating complex pricing for {booking_in.destination}..."
+    )
+
+    for i in range(500000):
+        discount_factor += math.sqrt(i) * random.random()
+        base_price = base_price + (math.sin(i) * 0.01)
+
+    # 결과 정제
+    final_price = max(base_price - (discount_factor % 50), 500.0)  # 최저가 제한
+
+    # 위변조 방지 토큰 생성 (SHA-256 해싱)
+    quote_data = f"{booking_in.user_id}#{booking_in.destination}#{final_price}#{booking_in.departure_date}"
+    quote_token = hashlib.sha256(quote_data.encode()).hexdigest()
+
+    logger.info(
+        f"💰 [Quote] ✅ Quote calculated: {booking_in.destination} = ${final_price:.2f}"
+    )
+
+    return {
+        "user_id": booking_in.user_id,
+        "destination": booking_in.destination,
+        "estimated_price": round(final_price, 2),
+        "quote_token": quote_token,
+        "valid_until": "15 minutes",
+    }
